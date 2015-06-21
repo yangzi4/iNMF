@@ -1,0 +1,413 @@
+from numpy import *
+import matplotlib.pyplot as plt
+import matplotlib.colors as clr
+import itertools as it
+import csv
+import time
+import os
+from scipy.stats.mstats import gmean
+from sklearn.metrics import consensus_score
+
+## Xs/Hs/Vs (list of numpy.ndarrays), W (numpy.ndarray), D/L/Sp (scalar)
+## Xs_dim (list of tuples), mod_dim (list of lists of tuples), e.g.:
+##     Xs_dim = [(100, 40), (100, 60)],
+##     mod_dim = [[(10, 10), (10, 5), (20, 5)], [(10, 5), (10, 10), (20, 10)]]
+
+## ___algorithm___
+def NMF_obj_eval(Xs, W, Hs, L, Sp, Vs=0):
+    "Evaluates NMF objective function (sparsity, Vs optional)."
+    if Vs == 0: Vs = [zeros((1, shape(Hs[i])[0])) for i in range(len(Xs))]
+    obj = sum([linalg.norm(Xs[i] - (W+Vs[i]).dot(Hs[i]))**2
+        for i in range(len(Xs))])
+    if type(L) != list: L = [L]*len(Xs)
+    pen = sum([L[i]*linalg.norm(Vs[i].dot(Hs[i]))**2 for i in range(len(Xs))])
+    spars = 0
+    if Sp != 0:
+        spars = Sp*sum([sum(abs(Hs[i])) for i in range(len(Xs))])
+    return obj+pen + spars
+
+def jNMF_run(Xs, D, Sp=0, nrep=200, steps=100):
+    "Joint NMF (sparsity optional)."
+    K = len(Xs)
+    N = shape(Xs[0])[0]
+    Ms = [shape(Xs[i])[1] for i in range(K)]
+    W_f = zeros((N, D))
+    Hs_f = [zeros((D, Ms[i])) for i in range(K)]
+    
+    obj_vals = []
+    n_iter = []
+    for j in range(nrep):
+        W = random.uniform(0, 2, (N, D))
+        Hs = [random.uniform(0, 2, (D, Ms[i])) for i in range(K)]
+        start_eval = 0
+        old_eval = inf
+        new_eval = 0
+        count = 0
+        while (abs(old_eval - new_eval) > (start_eval - new_eval)*1e-2
+            ) and (count <= 2e3):  ## 1.5e3
+            num = sum([Xs[i].dot(Hs[i].T) for i in range(K)], 0)
+            den = W.dot(sum([Hs[i].dot(Hs[i].T) for i in range(K)], 0))
+            W *= num/den
+            WTW = W.T.dot(W)
+            for i in range(K):
+                den = WTW.dot(Hs[i]) + Sp
+                Hs[i] = Hs[i]*(W.T.dot(Xs[i]))/den
+            if count == 0:
+                new_eval = NMF_obj_eval(Xs, W, Hs, 0, Sp)
+                start_eval = new_eval
+            if count != 0 and count % steps == 0:  ## count > thres, != 0
+                old_eval = new_eval
+                new_eval = NMF_obj_eval(Xs, W, Hs, 0, Sp)
+                #print new_eval, count
+            count += 1
+        obj_vals.append(new_eval)
+        n_iter.append(count)
+        #print j, new_eval, count
+        if obj_vals[-1] == min(obj_vals):
+            W_f = W
+            Hs_f = Hs
+    print "done"
+    return [W_f, Hs_f, obj_vals, n_iter]
+
+def iNMF_run(Xs, D, L, Sp=0, nrep=200, steps=100):
+    "Integrated NMF (sparsity optional)."
+    K = len(Xs)
+    N = shape(Xs[0])[0]
+    Ms = [shape(Xs[i])[1] for i in range(K)]
+    W_f = zeros((N, D))
+    Hs_f = [zeros((D, Ms[i])) for i in range(K)]
+    Vs_f = [zeros((N, D)) for i in range(K)]
+    
+    obj_vals = []
+    n_iter = []
+    for j in range(nrep):
+        W = random.uniform(0, 2, (N, D))
+        Hs = [random.uniform(0, 2, (D, Ms[i])) for i in range(K)]
+        Vs = [random.uniform(0, 2, (N, D)) for i in range(K)]
+        start_eval = 0
+        old_eval = inf
+        new_eval = 0
+        count = 0
+        while (abs(old_eval - new_eval) > (start_eval - new_eval)*1e-2
+            ) and (count <= 2e3):  ## 1.5e3
+            num = sum([Xs[i].dot(Hs[i].T) for i in range(K)], 0)
+            den = sum([(W+Vs[i]).dot(Hs[i]).dot(Hs[i].T) for i in range(K)], 0)
+            W *= num/den
+            for i in range(K):
+                WV = W+Vs[i]
+                den = (WV.T.dot(WV) + L*Vs[i].T.dot(Vs[i])).dot(Hs[i]) + Sp
+                Hs[i] *= (WV.T.dot(Xs[i]))/den
+            for i in range(K):
+                den = (W+(1+L)*Vs[i]).dot(Hs[i]).dot(Hs[i].T)
+                Vs[i] *= Xs[i].dot(Hs[i].T)/den
+            if count == 0:
+                new_eval = NMF_obj_eval(Xs, W, Hs, L, Sp, Vs)
+                start_eval = new_eval
+            if count != 0 and count % steps == 0:  ## count > thres, != 0
+                old_eval = new_eval
+                new_eval = NMF_obj_eval(Xs, W, Hs, L, Sp, Vs)
+            count += 1
+        obj_vals.append(new_eval)
+        n_iter.append(count)
+        #print j, new_eval, count
+        if obj_vals[-1] == min(obj_vals):
+            W_f = W
+            Hs_f = Hs
+            Vs_f = Vs
+    print "done"
+    return [W_f, Hs_f, Vs_f, obj_vals, n_iter]
+
+def iNMF_tuning_select(Xs_, D, mod_dim=0, c=2, L_range =
+    [10**x for x in arange(0, -2.5, -0.5)], L_s=0):
+    """Tuning selection for iNMF, returns L/jNMF/sNMF/iNMF output
+    (requires decreasing list of L)."""
+    res0 = jNMF_run(Xs_, D, L_s)
+    baseline = sum([linalg.norm(Xs_[k] - res0[0].dot(res0[1][k])) for k in range(len(Xs_))])
+    #print "baseline: " + str(baseline)
+    norms = 0
+    res1 = [[], []]
+    for k in range(len(Xs_)):
+        res = jNMF_run([Xs_[k]], D, L_s)
+        res1[0].append(res[0])
+        res1[1].append(res[1][0])
+        norms += linalg.norm(Xs_[k] - res[0].dot(res[1][0]))
+    thres = baseline + c*(baseline - norms)
+    print "threshold: " + str(thres), str([baseline, norms])
+    OVs = []
+    res_list = []
+    for L in L_range:
+        res = iNMF_run(Xs_, D, L, L_s)
+        res_list.append(res)
+        OV = sum([linalg.norm(Xs_[k] - res[0].dot(res[1][k])) for k in range(len(Xs_))])
+        OVs.append(OV)
+        if mod_dim != 0: print L, detect_score2(res, mod_dim), OV
+        if OV > thres:
+            idx = max(L_range.index(L) - 1, 0)
+            print "chosen: " + str(L_range[idx])
+            return [L_range[idx], res0, res1, res_list[idx]]
+    print "chosen: " + str(L_range[-1])
+    return [L_range[-1], res0, res1, res_list[-1]]
+
+
+## ___data generation___
+def ptb_gen(dims, mod_dim_s, rate, sign=1):
+    "Generates random perturbation blocks (returns numpy.ndarray)."
+    n_mod = len(mod_dim_s)
+    mat = zeros(dims)
+    r_idx = 0
+    for i in range(n_mod):
+        c_idx = 0
+        for j in range(n_mod):
+            rows = mod_dim_s[i][0]
+            cols = mod_dim_s[j][1]
+            if random.binomial(1, rate) == 1:
+                if random.binomial(1, 0.5) == 1:
+                    mat[r_idx:(r_idx+rows/2), c_idx:(c_idx+cols)] = random.binomial(
+                        1, sign, (rows/2, cols))*2 - 1
+                else:
+                    mat[(r_idx+rows/2):(r_idx+rows), c_idx:(c_idx+cols)] = random.binomial(
+                        1, sign, (rows - rows/2, cols))*2 - 1
+            c_idx += cols
+        r_idx += rows
+    return mat
+
+def NMF_data_gen(Xs_dim, mod_dim, e_u, e_s=0, e_h=0):
+    """Generates NMF-type data sets from dimensions of X's and common
+    modules (u/s/h error)."""
+    K = len(Xs_dim)
+    N = Xs_dim[0][0]
+    Ms = [Xs_dim[k][1] for k in range(K)]
+    D = len(mod_dim[0])
+    e_u = max(e_u, 0.01)
+    
+    W = zeros((N, D))  ## support
+    Hs = [zeros((D, Ms[k])) for k in range(K)]
+    for k in range(K):
+        r_idx = 0
+        c_idx = 0
+        for d in range(D):
+            rows = mod_dim[k][d][0]
+            cols = mod_dim[k][d][1]
+            W[r_idx:(r_idx+rows), d] = 1
+            Hs[k][d, c_idx:(c_idx+cols)] = 1
+            r_idx += rows
+            c_idx += cols
+    
+    new_mod_dim = [[(mod[0], 1) for mod in mod_dim[k]] for k in range(K)]  ## hetr
+    Vs = [ptb_gen((N, D), new_mod_dim[k], e_h) for k in range(K)]
+    W *= random.beta(2, 2, (N, D))*2  ## values
+    Vs = [Vs[k]*random.beta(2, 2, (N, D))*2 for k in range(K)]
+    Hs = [Hs[k]*random.beta(2, 2, (D, Ms[k]))*2 for k in range(K)]
+    Xs = [(W+Vs[k]).dot(Hs[k]) for k in range(K)]  ## mult
+    
+    #plt.figure()
+    #plt.subplot(2, 1, 1)
+    #plt.pcolormesh(W)
+    #for k in range(K):
+    #    plt.subplot(2, K, K+k+1)
+    #    plt.pcolormesh(Hs[k])
+    
+    for k in range(K):  ## scat
+        for n in range(N):
+            for m in range(Ms[k]):
+                if random.binomial(1, e_s) == 1:
+                    if Xs[k][n, m] > 0: Xs[k][n, m] = 0
+                    else: Xs[k][n, m] = (random.beta(2, 2)*2)**2
+    Xs = [abs(Xs[k] + random.uniform(-e_u, e_u, (N, Ms[k]))) for k in range(K)]  ## unif
+    return Xs
+
+
+## ___evaluation___
+def plot_NMF(x, perm=0):
+    "Plots W and Hs from jNMF/iNMF output."
+    K = len(x[1])
+    plt.figure()
+    plt.subplot(2, 1, 1)
+    if perm == 0: perm = range(K)
+    plt.pcolormesh(x[0][:, perm])
+    for i in range(K):
+        plt.subplot(2, K, i+K+1)
+        plt.pcolormesh(x[1][i][perm, :])
+    return
+
+def plot_NMF2(x):
+    "Plots WHs and Vs from iNMF output."
+    K = len(x[1])
+    plt.figure()
+    for k in range(K):
+        plt.subplot(2, K, k+1)
+        plt.pcolormesh(x[0].dot(x[1][k]))
+    for k in range(K):
+        plt.subplot(2, K, k+K+1)
+        plt.pcolormesh(x[2][k])
+    return
+
+def Hung_alg(mat):
+    "Hungarian algorithm, finds maximum indices."
+    dim = shape(mat)[0]
+    mat = (mat.T - amax(mat, 1).T).T
+    rand_i = []
+    while len(rand_i) != dim:
+        max_idcs = []  ## max indices
+        for i in range(dim):
+            row_max = max(mat[i, :])
+            max_cols = argwhere(mat[i, :] == row_max)
+            for j in max_cols:
+                max_idcs.append((i, j[0]))
+        #print "max_ids", max_idcs
+        
+        rand_i = []  ## random assignment
+        rand_j = []
+        for idx in random.permutation(max_idcs):
+            if idx[0] not in rand_i and idx[1] not in rand_j:
+                rand_i.append(idx[0])
+                rand_j.append(idx[1])
+        #print "assg", rand_i, rand_j
+        
+        mark_i = []  ## markings
+        mark_j = []
+        for i in range(dim):
+            if i not in rand_i: mark_i.append(i)
+        #print "mk1", mark_i
+        added = 1
+        while added > 0:
+            added = 0
+            for i in mark_i:
+                for j in range(dim):
+                    if (i, j) in max_idcs and j not in mark_j:
+                        mark_j.append(j)
+                        added += 1
+            for j in mark_j:
+                for i in range(dim):
+                    if i in rand_i and j == rand_j[rand_i.index(i)] and i not in mark_i:
+                        mark_i.append(i)
+                        added += 1
+        #print "mkd", mark_i, mark_j
+        left = []  ## indices left
+        for i in range(dim):
+            for j in range(dim):
+                if j not in mark_j and i in mark_i: left.append((i, j))
+        if len(left) > 0: highest = max([mat[idx[0], idx[1]] for idx in
+            left])
+        else: highest = 0
+        #print "lft", left, highest
+        
+        for idx in left: mat[idx[0], idx[1]] -= highest  ## adjust
+        for j in mark_j:
+            for i in range(dim):
+                if i not in mark_i: mat[i, j] += highest
+        #print len(rand_i), len(rand_j)
+    return rand_i, rand_j
+
+def detect_score1(x, mod_dim, comp):
+    """Amount of signal differentiated from noise, maximized over
+    permutations."""
+    n_mod = len(mod_dim[0])
+    values = zeros((n_mod, n_mod))
+    j_est = x[0].dot(x[1][comp])
+    
+    mod_h = [mod_dim[0][i][0] for i in range(n_mod)]
+    idx_h = [int(sum(mod_h[:i])) for i in range(n_mod)]
+    idx_h.append(sum(mod_h))
+    mod_w = [mod_dim[0][i][1] for i in range(n_mod)]
+    idx_w = [int(sum(mod_w[:i])) for i in range(n_mod)]
+    idx_w.append(sum(mod_w))
+    
+    for i in range(n_mod):
+        for j in range(n_mod):
+            values[i, j] = mean(j_est[idx_h[i]:idx_h[i+1], idx_w[j]:idx_w[j+1]])
+    #idcs = Hung_alg(values)
+    idcs = [range(n_mod), range(n_mod)]
+    signal = mean([values[idcs[0][idx], idcs[1][idx]] for idx in range(n_mod)])
+    noise = (sum(values[:n_mod, :n_mod]) - n_mod*signal)/(n_mod**2 - n_mod)
+    return 1 - noise/max(signal, noise)
+
+def detect_score2(x, mod_dim):
+    "Applies and averages detect_score1() results over data sources."
+    K = len(x[1])
+    scores = [detect_score1(x, mod_dim, k) for k in range(K)]
+    return mean(scores)
+
+def detect_score3(x, mod_dim):
+    "Consensus score (takes jNMF/iNMF output)."
+    K = len(x[1])
+    D = shape(x[1][0])[0]
+    if type(x[0]) != list:
+        Ws_n = [x[0]/linalg.norm(x[0], axis=0)]*K
+        Hs_n = [(x[1][k].T*linalg.norm(x[0], axis=0)).T for k in range(K)]
+    else:
+        Ws_n = [x[0][k]/linalg.norm(x[0][k], axis=0) for k in range(K)]
+        Hs_n = [(x[1][k].T*linalg.norm(x[0][k], axis=0)).T for k in range(K)]
+    rows_list = []
+    cols_list = []
+    for k in range(K):
+        rows_list.append(list(argmax(Ws_n[k], 1)))
+        cols_list.append(list(argmax(Hs_n[k], 0)))
+    
+    scores = []
+    for k in range(K):
+        rs = array(rows_list[k])
+        cs = array(cols_list[k])
+        rows = vstack([rs == d for d in range(D)])
+        cols = vstack([cs == d for d in range(D)])
+        t_rows = []
+        t_cols = []
+        for idx, mod in enumerate(mod_dim[k]):
+            t_rows = t_rows + [idx]*mod[0]
+            t_cols = t_cols + [idx]*mod[1]
+        t_r = array(t_rows)
+        t_c = array(t_cols)
+        T_rows = vstack([t_r == d for d in range(D)])
+        T_cols = vstack([t_c == d for d in range(D)])
+        scores.append(consensus_score((rows[:, :len(t_rows)], cols[:, :len(t_cols)]),
+            (T_rows, T_cols)))
+    return gmean(scores)
+
+def detect_score4(x, mod_dim):
+    """Consensus score (takes tuple(obs/var) of lists(sources) of lists
+    of memberships)."""
+    K = len(x[1])
+    D = shape(x[1][0])[0]
+    if type(x[0]) != list:
+        rows = [x[0]]*K
+    else:
+        rows = [x[0][k] for k in range(K)]
+    cols = [x[1][k] for k in range(K)]
+    
+    scores = []
+    for k in range(K):
+        t_rows = []
+        t_cols = []
+        for idx, mod in enumerate(mod_dim[k]):
+            t_rows = t_rows + [idx]*mod[0]
+            t_cols = t_cols + [idx]*mod[1]
+        t_r = array(t_rows)
+        t_c = array(t_cols)
+        T_rows = vstack([t_r == d for d in range(D)])
+        T_cols = vstack([t_c == d for d in range(D)])
+        scores.append(consensus_score((rows[k][:, :len(t_rows)], cols[k][:, :len(t_cols)]),
+            (T_rows, T_cols)))
+    return gmean(scores)
+
+def common_mod(x):
+    "Returns common modules (uses column-maxes of Hs)."
+    K = len(x[1])
+    Hs = [x[1][k] for k in range(K)]
+    D = shape(x[1][0])[0]
+    Ms = [shape(Hs[k])[1] for k in range(K)]
+    
+    #HsN = [Hs[k] for k in range(K)]
+    HsN = [(Hs[k].T/mean(Hs[k], 1)).T for k in range(K)]
+    cluster_vars = [[[] for d in range(D)] for k in range(K)]
+    for k in range(K):
+        for n in range(Ms[k]):
+            d_max = argmax(HsN[k][:, n])
+            cluster_vars[k][d_max].append(n)
+    #print "lengths:"
+    #for k in range(K):
+    #    p_list = []
+    #    for d in range(D):
+    #        p_list += cluster_vars[k][d]
+    #    print [k, len(set(p_list))]
+    return cluster_vars
+
