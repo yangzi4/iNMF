@@ -1,0 +1,574 @@
+from numpy import *
+import matplotlib.pyplot as plt
+import itertools as it
+import csv
+import time
+import os
+
+## ___parsing___:
+def readfile(f_name, d_type):
+    "Reads file and extracts data (ID, index list, data list)."
+    if d_type == "DM": ID_col = 0
+    if d_type == "GE": ID_col = 0
+    if d_type == "ME": ID_col = 0
+    
+    f = open(f_name, "r")
+    reader = csv.reader(f, delimiter="\t")
+    indices = []
+    raw = []
+    for idx, row in enumerate(reader):
+        if idx == 0:
+            obs_id = row[1][:15]
+        if idx >= 2:
+            indices.append(row[ID_col])
+            raw.append(row[1])
+    f.close()
+    
+    data = []
+    for value in raw:
+        if value == "NA" or value == "null" or value == '': data.append(nan)
+        else: data.append(float(value))
+    return [obs_id, indices, data]
+
+def readfolder(path, d_type):
+    """Reads files and returns array (with variable and observation
+    lists), with equivalent variables combined."""
+    os.chdir(path)
+    idx = 0
+    obs_list = []
+    data = []
+    for f_name in os.listdir(path):
+        one_file = readfile(f_name, d_type)
+        if idx == 0:
+            var_list = one_file[1]
+            idx += 1
+        obs_list.append(one_file[0])
+        data.append(one_file[2])
+    data = array(data)
+    return [obs_list, var_list, array(data)]  ## change
+    
+    new_vars = []
+    new_data = []
+    for var in set(var_list):
+        common_vars = argwhere(array(list(set(var_list))) == var)
+        values = []
+        for i in common_vars:
+            values.append(list(data[:, i[0]]))
+        geomean = prod(values, 0)**(1.0/len(values))
+        if idx == 1:
+            print shape(values), shape(geomean)
+        idx += 1
+        if idx % 100 == 0: print idx
+        new_vars.append(list(set(var_list))[common_vars[0]])
+        new_data.append(geomean)
+    return [obs_list, new_vars, array(new_data).T]
+
+## define paths: DM, GE, ME
+
+DM_raw = readfolder(DM, "DM")
+GE_raw = readfolder(GE, "GE")
+ME_raw = readfolder(ME, "ME")
+
+## define: analysis_path
+os.chdir(analysis_path)
+## save("DM_raw", DM_raw)
+## save("GE_raw", GE_raw)
+## save("ME_raw", ME_raw)
+
+
+## ___processing___:
+os.chdir(analysis_path)
+DM_raw = load("DM_raw.npy")
+GE_raw = load("GE_raw.npy")
+ME_raw = load("ME_raw.npy")
+
+def elim_nan(raw, which, rows=[]):
+    "Eliminates rows or columns with missing values (lists done in place)."
+    obs = raw[0]
+    var = raw[1]
+    data = raw[2]
+    del_c = []
+    if which == "cols":
+        for j in reversed(range(shape(data)[1])):
+            if prod([isnan(data[i, j]) == 0 for i in range(shape(data)[0])]) == 0:  ## if not all valid
+                del_c.append(var.pop(j))
+                print "columns: " + str(del_c[-1])
+                data = delete(data, j, 1)
+    if which == "rows":
+        for row in rows:
+            del_c.append(obs.pop(row))
+            print "row: " + str(del_c[-1])
+            data = delete(data, j, 0)
+    return [obs, var, data, del_c]
+
+DM_raw_nonan = elim_nan(DM_raw, "cols")
+GE_raw_nonan = elim_nan(GE_raw, "cols")
+ME_raw_nonan = elim_nan(ME_raw, "cols")
+## check before deleting rows
+#DM_raw_nonan = elim_nan(DM_raw, "rows")
+#GE_raw_nonan = elim_nan(GE_raw, "rows")
+#ME_raw_nonan = elim_nan(ME_raw, "rows")
+
+DM_vars = DM_raw_nonan[1]
+GE_vars = GE_raw_nonan[1]
+ME_vars = ME_raw_nonan[1]
+c_obs = []
+c_DMdata = []
+c_GEdata = []
+c_MEdata = []
+for obs in GE_raw_nonan[0]:
+    if obs in DM_raw_nonan[0] and obs in ME_raw_nonan[0]:
+        c_obs.append(obs)
+        c_DMdata.append(DM_raw_nonan[2][DM_raw_nonan[0].index(obs), :])
+        c_GEdata.append(GE_raw_nonan[2][GE_raw_nonan[0].index(obs), :])
+        c_MEdata.append(ME_raw_nonan[2][ME_raw_nonan[0].index(obs), :])
+print shape(DM_raw_nonan[2]), shape(GE_raw_nonan[2]), shape(ME_raw_nonan[2])
+print shape(c_DMdata), shape(c_GEdata), shape(c_MEdata)
+datasets = [array(c_DMdata), array(c_GEdata), array(c_MEdata)]
+variables = [DM_vars, GE_vars, ME_vars]
+
+flt_vars = []
+for k in [0]:
+    flt_vars.append([])
+    filtered = zeros((shape(datasets[0])[0], 0))
+    m_thres = percentile(mean(datasets[k], 0), 15)
+    for n in range(shape(datasets[k])[1]):
+        column = datasets[k][:, n:n+1]
+        if mean(column) >= m_thres:
+            flt_vars[-1].append(variables[k][n])
+            filtered = hstack((filtered, column))
+    variables[k] = flt_vars[-1]
+    datasets[k] = filtered
+flt_vars = []
+for k in [0, 1]:
+    flt_vars.append([])
+    filtered = zeros((shape(datasets[0])[0], 0))
+    v_thres = percentile(std(datasets[k], 0), 15)
+    for n in range(shape(datasets[k])[1]):
+        column = datasets[k][:, n:n+1]
+        if std(column) >= v_thres:
+            flt_vars[-1].append(variables[k][n])
+            filtered = hstack((filtered, column))
+    variables[k] = flt_vars[-1]
+    datasets[k] = filtered
+
+plt.figure()
+plt.hist(datasets[0].flatten(), bins=20)
+plt.figure()
+plt.hist(datasets[1].flatten(), bins=20)
+plt.figure()
+plt.hist(datasets[2].flatten(), bins=20)
+
+def transform_DM(data):
+    "Transforms DM data (divide)."
+    x = data/nanstd(data)#sqrt(sum(data**2))
+    return x
+
+def transform_GE(data):
+    "Transforms GE data (divide, shift, truncate)."
+    x = data/nanstd(data)
+    x += 4
+    x = amax((x, random.uniform(0, 1e-3, shape(x))), 0)
+    x = amin((x, 8 - random.uniform(0, 1e-3, shape(x))), 0)
+    return x#/sqrt(sum(x**2))
+
+def transform_ME(data):
+    "Transforms ME data (log2, shift, truncate, divide)."
+    x = log2(data) - 2
+    x = amax((x, random.uniform(0, 1e-3, shape(x))), 0)
+    x = amin((x, 4 - random.uniform(0, 1e-3, shape(x))), 0)
+    x = x/nanstd(x)#sqrt(sum(x**2))
+    return x
+
+tsf_datasets = [transform_DM(datasets[0]), transform_GE(datasets[1]),
+    transform_ME(datasets[2])]
+
+plt.figure()
+plt.hist(tsf_datasets[0].flatten(), bins=20)
+plt.figure()
+plt.hist(tsf_datasets[1].flatten(), bins=20)
+plt.figure()
+plt.hist(tsf_datasets[2].flatten(), bins=20)
+
+os.chdir(analysis_path)
+## save("obs", c_obs)
+## save("DM_vars", DM_vars)
+## save("GE_vars", GE_vars)
+## save("ME_vars", ME_vars)
+## save("data_set_DM", c_DMdata)
+## save("data_set_GE", c_GEdata)
+## save("data_set_ME", c_MEdata)
+## save("flt_DM_vars", variables[0])
+## save("flt_GE_vars", variables[1])
+## save("flt_ME_vars", variables[2])
+## save("flt_dataset_DM", tsf_datasets[0])
+## save("flt_dataset_GE", tsf_datasets[1])
+## save("flt_dataset_ME", tsf_datasets[2])
+
+
+## ___run___:
+os.chdir(analysis_path)
+datasets = [load("flt_dataset_DM.npy"), load("flt_dataset_GE.npy"), load("flt_dataset_ME.npy")]
+
+L_sel2 = iNMF_tuning_select(datasets, 2)
+L_sel4 = iNMF_tuning_select(datasets, 4)
+
+r_data = [2, 4]
+l_range = [10**-1, 10**-1]
+for ls in [0, 1, 2, 3, 4]:
+    for r in [0, 1]:  ## change
+        begin = time.time()
+        results1 = jNMF_run(datasets, r_data[r], 10**-ls)
+        print time.time() - begin
+        save("jNMFresS%d_D%drep200c1" % (ls, r_data[r]), results1)
+        
+        begin = time.time()
+        results2 = iNMF_run(datasets, r_data[r], l_range[r], 10**-ls)
+        print time.time() - begin
+        save("iNMFresS%d_D%drep200c1" % (ls, r_data[r]), results2)
+
+
+## ___analysis___:
+os.chdir(analysis_path)
+DM_vars = list(load("flt_DM_vars.npy"))
+GE_vars = list(load("flt_GE_vars.npy"))
+ME_vars = list(load("flt_ME_vars.npy"))
+all_vars = [DM_vars, GE_vars, ME_vars]
+
+def var_group_table(var_list, d_type, data_list):
+    """Inputs variable groups (list of lists) and data list (list of
+    lists), outputs table for indexing ("DM"/"GE"/"ME")."""
+    if d_type == "DM": wh_data = 0
+    if d_type == "GE": wh_data = 1
+    if d_type == "ME": wh_data = 2
+    code_mat = []
+    data_vars = data_list[wh_data]
+    
+    for idx, var_group in enumerate(var_list):
+        for var in var_group:
+            row = [var, nan, nan, nan, idx]
+            if var in data_vars: row[wh_data+1] = data_vars.index(var)
+            code_mat.append(row)
+        code_mat.append(['']*5)
+    return code_mat
+
+def est_lookup(idx, which_data, code_mat):
+    "Looks up index (given data type) from pre-defined code matrix."
+    var_list = [code_mat[i][which_data + 1] for i in range(len(code_mat))]
+    if idx in var_list:
+        #return code_mat[var_list.index(idx)][0]
+        return str(code_mat[var_list.index(idx)][4]) + ': ' + code_mat[var_list.index(idx)][0]
+    else: return ''
+
+paper_list1a = [  ## Immunoreactive/Proliferative/Differentiated/Mesenchymal
+    ['CXCL11', 'CXCL10', 'CXCR3'],
+    ['HMGA2', 'SOX11', 'MCM2', 'PCNA'],
+    ['MUC16', 'MUC1', 'SLPI'],
+    ['FAP', 'ANGPTL2', 'ANGPTL1']
+    ]#3
+paper_list1a_DM = [  ## Immunoreactive/Proliferative/Differentiated/Mesenchymal
+    ['cg08046471', 'cg01288089', 'cg08843314'],
+    ['cg03251079', 'cg20088964', 'cg08432727', 'cg20008332', 'cg10691006',
+        'cg15057726', 'cg02689825', 'cg04562739', 'cg25984124'],
+    ['cg06420088', 'cg07399355', 'cg17257175', 'cg24512973', 'cg12966875',
+        'cg23889010'],
+    ['cg08826839', 'cg09427311', 'cg11213150', 'cg07044282']
+    ]#3
+
+paper_list1b = [  ## RB & RAS_PI-3-Kinase signaling/NOTCH signaling/homologous
+                  ## repair alterations/FOXM1 signaling
+    ['CDKN2A', 'CCNE1', 'CCND1', 'CCND2', 'RB1', 'NF1', 'KRAS', 'PTEN',
+        'PIK3CA', 'BRAF', 'AKT1', 'AKT2'],  ## PTEN
+    ['JAG1', 'JAG2', 'MAML1', 'MAML2', 'MAML3', 'NOTCH3'],
+    ['ATM', 'ATR', 'BRCA1', 'BRCA2', 'FANCD2', 'RAD51C'],  ## ATM, ATR, BRCA1, BRCA2
+    ['CHEK2', 'RAD51', 'FOXM1', 'TP53', 'PLK1', 'CCNB1', 'AURKB', 'BIRC5',
+        'CDC25B']
+    ]#6
+paper_list1b_DM = [  ## RB & RAS_PI-3-Kinase signaling/NOTCH signaling/homologous
+                  ## repair alterations/FOXM1 signaling
+    ['cg00718440', 'cg03079681', 'cg12840719', 'cg26605086', 'cg19522332',
+        'cg22384366', 'cg02956093', 'cg22973042'],  ## PTEN
+    ['cg23643330', 'cg24652271', 'cg05335315', 'cg27177839', 'cg14908548',
+        'cg20060451', 'cg04280758', 'cg07060572', 'cg06650786', 'cg17498321'],
+    ['cg11458642', 'cg20636078', 'cg12836863', 'cg27253386', 'cg02579736',
+        'cg24596576', 'cg19208681'],  ## ATM, ATR, BRCA1, BRCA2
+    ['cg04662451', 'cg21465754', 'cg09976774', 'cg18470891', 'cg06587969',
+        'cg15206330', 'cg22175811', 'cg06240124', 'cg26003813', 'cg13849825',
+        'cg23935746', 'cg11009596', 'cg12844497', 'cg26267341', 'cg03524627',
+        'cg08770869']
+    ]#7
+paper_list2 = [  ## worse/better prognosis
+    ['hsa-miR-19a', 'hsa-miR-19b', 'hsa-miR-136', 'hsa-miR-376c',
+        'hsa-miR-483-5p', 'hsa-miR-572', 'hsa-miR-575', 'hsa-miR-638',
+        'hsa-miR-671-5p', 'hsa-miR-769-5p', 'hsa-miR-923',
+        'hsa-miR-1225-5p'],
+    ['hsa-miR-15b', 'hsa-miR-98', 'hsa-miR-135b', 'hsa-miR-146a',
+        'hsa-miR-148a', 'hsa-miR-148b', 'hsa-miR-150', 'hsa-miR-221*',
+        'hsa-miR-342-5p', 'hsa-miR-361-3p', 'hsa-miR-362-3p',
+        'hsa-miR-374a', 'hsa-miR-374b', 'hsa-miR-450a', 'hsa-miR-454',
+        'hsa-miR-502-5p', 'hsa-miR-505', 'hsa-miR-532-3p',
+        'hsa-miR-582-5p', 'hsa-miR-625', 'hsa-miR-652', 'hsa-miR-660']
+    ]#12
+KEGG_list1a = [  ## down-regulated miRNA (epithelial OV cancer)
+    ['hsa-let-7a','hsa-let-7a*'],
+    ['hsa-miR-143','hsa-miR-143*', 'hsa-miR-34a','hsa-miR-34a*', 'hsa-miR-34b',
+        'hsa-miR-34b*', 'hsa-miR-34c-3p','hsa-miR-34c-3p*', 'hsa-miR-125a-3p',
+        'hsa-miR-125a-5p'],
+    ['hsa-miR-9','hsa-miR-9*', 'hsa-miR-199a-5p'],
+    ['hsa-miR-200a','hsa-miR-200a*']
+    ]
+KEGG_list1c = [  ## up-regulated miRNA (epithelial OV cancer)
+    ['hsa-miR-21','hsa-miR-21*', 'hsa-miR-214','hsa-miR-214*', 'hsa-let-7a',
+        'hsa-let-7a*', 'hsa-miR-146a','hsa-miR-146a*', 'hsa-miR-106b',
+        'hsa-miR-106b*', 'hsa-miR-20a','hsa-miR-20a*'],
+    ['hsa-miR-210', 'hsa-miR-19a','hsa-miR-19a*'],
+    ['hsa-miR-200a','hsa-miR-200a*']
+    ]
+KEGG_list1ac_ME = [  ## down/up-regulated miRNA (epithelial OV cancer)
+    [ 'hsa-miR-143','hsa-miR-143*', 'hsa-miR-34a',#'hsa-let-7a','hsa-let-7a*',
+        'hsa-miR-34a*', 'hsa-miR-34b','hsa-miR-34b*', 'hsa-miR-34c-3p',
+        'hsa-miR-34c-3p*', 'hsa-miR-125a-3p','hsa-miR-125a-5p', 'hsa-miR-9',
+        'hsa-miR-9*', 'hsa-miR-199a-5p'],#, 'hsa-miR-200a','hsa-miR-200a*'
+    ['hsa-miR-21','hsa-miR-21*', 'hsa-miR-214','hsa-miR-214*', #'hsa-let-7a',
+        'hsa-miR-146a','hsa-miR-146a*', 'hsa-miR-106b', #'hsa-let-7a*', 
+        'hsa-miR-106b*', 'hsa-miR-20a','hsa-miR-20a*', 'hsa-miR-210',
+        'hsa-miR-19a','hsa-miR-19a*']#, 'hsa-miR-200a','hsa-miR-200a*'
+    ]#13
+KEGG_list1b = [  ## up-regulated genes (epithelial OV cancer)
+    ['HMGA2', 'IGF2BP1', 'Mlin-41*'],
+    ['KRAS', 'MET', 'NOTCH1', 'CDK6', 'ERBB2'],
+    ['NFKB1', 'IKBKB', 'PTGS2'],
+    ['ZEB1', 'ZEB2']
+    ]
+KEGG_list1d = [  ## down-regulated genes (epithelial OV cancer)
+    ['PTEN', 'HMGA2', 'BRCA1', 'CDKN1A'],
+    ['E2F3', 'EFNA3', 'THBS1', 'ZEB1', 'ZEB2']
+    ]
+KEGG_list1bd_DM = [  ## up/down-regulated genes (epithelial OV cancer)
+    ['cg06638433','cg13877465', 'cg00584022',#'cg03251079','cg20088964', 
+        'cg02850821','cg08578305','cg11276198','cg17197538','cg18394848',
+        'cg14191360','cg25299676', 'cg16829154','cg20042228', 'cg01638735',
+        'cg01756060', 'cg09875273','cg11993754','cg13263114',
+        'cg16065186','cg19752722','cg22778981',
+        'cg26111030','cg27005179', 'cg01137708','cg03464689', 'cg04223844',
+        'cg22960501', 'cg09461185','cg13986130','cg18335243','cg19155599'],#,
+        #'cg09010998','cg24861272', 'cg07246225','cg15377518'],
+    ['cg01228636','cg04738091','cg08859916','cg16687447','cg17489897',
+        'cg20849549','cg21573601',# 'cg03251079','cg20088964',
+        'cg06973652','cg07054526','cg08993267','cg11964474',
+        'cg14048487','cg19088651','cg19531713','cg27383744',
+        'cg01306510','cg03714916','cg05759269','cg08179530','cg10936763',
+        'cg21222430', 'cg18152712','cg27250759', 'cg05813084','cg17582777',
+        'cg04051458','cg05886626','cg19570574','cg22580173'#, 'cg09010998',
+        ]#'cg24861272', 'cg07246225','cg15377518']
+    ]#29
+KEGG_list1bd_GE = [  ## up/down-regulated genes (epithelial OV cancer)
+    ['IGF2BP1', 'KRAS', 'MET', 'NOTCH1', 'CDK6', 'ERBB2', 'NFKB1',#'HMGA2', 
+        'IKBKB', 'PTGS2'],#, 'ZEB1', 'ZEB2'
+    ['PTEN', 'BRCA1', 'CDKN1A', 'E2F3', 'EFNA3', 'THBS1']#, 'ZEB1',#'HMGA2', 
+    #    'ZEB2']
+    ]#6
+
+def print_lab_cts(mods_labs, dim):
+    "Prints variable labels and counts for 'compare' function."
+    #for d in range(dim): print sorted(mods_labs[d])
+    print sum([len(mods_labs[d]) - 1 for d in range(dim)])
+    return sum([len(mods_labs[d]) - 1 for d in range(dim)])
+
+def print_impt(mem_lists, dim):
+    "Prints average impurities for 'compare' function."
+    total = []
+    ct = 0
+    for d in range(dim):
+        if len(mem_lists[d]) > 1:
+            n = len(mem_lists[d])
+            fracs = [mem_lists[d].count(i) for i in range(dim)]
+            total.append(sum([fracs[i]*(n - fracs[i]) for i in range(dim)])/float(n))
+            ct += n
+    print [round(total[i]/ct, 2) for i in range(len(total))]#round(sum(total)/ct, 2)
+    return round(sum(total)/ct, 2)
+
+def print_prt(mem_lists, dim):
+    "Prints purities for 'compare' function."
+    n = sum([len(mem_lists[i]) for i in range(dim)])
+    n_mat = [[mem_lists[j].count(i) for j in range(dim)] for i in range(dim)]
+    n_mat = array(n_mat)
+    print [round(amax(n_mat, 0)[i]/float(n), 2) for i in range(len(amax(n_mat, 0)))]#round(sum(amax(n_mat, 0))/float(n), 2)
+    return round(sum(amax(n_mat, 0))/float(n), 2)
+
+def print_etp(mem_lists, dim):
+    "Prints entropies for 'compare' function."
+    n_list = [len(mem_lists[i]) for i in range(dim)]
+    if prod(n_list) == 0:
+        return nan
+    n = sum(n_list)
+    n_mat = [[mem_lists[j].count(i) for j in range(dim)] for i in range(dim)]
+    mat = [[n_mat[i][j]*log2(n_mat[i][j]/float(n_list[j])) for j in range(dim)]
+        for i in range(dim)]
+    print round(sum(mat)/(n*log2(dim)), 2)
+    return round(sum(mat)/(n*log2(dim)), 2)
+
+def compare(var_list, d_type, data_list, s_lab=""):
+    """Compares jNMF/iNMF based on various scores."""
+    dim = len(var_list)
+    d_idx = ["DM", "GE", "ME"].index(d_type)
+    code_mat = var_group_table(var_list, d_type, data_list)
+    
+    results1 = load("jNMFresS%s_D%drep200c1.npy" % (s_lab, dim))
+    results2 = load("iNMFresS%s_D%drep200c1.npy" % (s_lab, dim))
+    mods1 = common_mod(results1)
+    mods2 = common_mod(results2)
+    
+    mods1_labs = [list(set([est_lookup(mods1[d_idx][d][i], d_idx, code_mat) for
+        i in range(len(mods1[d_idx][d]))])) for d in range(dim)]
+    mods2_labs = [list(set([est_lookup(mods2[d_idx][d][i], d_idx, code_mat) for
+        i in range(len(mods2[d_idx][d]))])) for d in range(dim)]
+    #a1 = print_lab_cts(mods1_labs, dim)
+    #a2 = print_lab_cts(mods2_labs, dim)
+    
+    mem_lists1 = [[int(mods1_labs[i][j][0]) for j in range(1, len(mods1_labs
+        [i]))] for i in range(dim)]
+    mem_lists2 = [[int(mods2_labs[i][j][0]) for j in range(1, len(mods2_labs
+        [i]))] for i in range(dim)]
+    print 'imp'
+    b1 = print_impt(mem_lists1, dim)
+    b2 = print_impt(mem_lists2, dim)
+    print 'prt'
+    c1 = print_prt(mem_lists1, dim)
+    c2 = print_prt(mem_lists2, dim)
+    #print 'etp'
+    #d1 = print_etp(mem_lists1, dim)
+    #d2 = print_etp(mem_lists2, dim)
+    for i in range(dim):
+        if '' in mods1_labs[i]: mods1_labs[i].remove('')
+        if '' in mods2_labs[i]: mods2_labs[i].remove('')
+    #print mods1_labs
+    #print mods2_labs
+    print ''
+    return [mods1_labs, mods2_labs]
+
+s_str = "3"
+res = compare(paper_list1a_DM, "DM", all_vars, s_lab=s_str)  ## change
+res = compare(paper_list1a, "GE", all_vars, s_lab=s_str)  ## change
+#res = compare(paper_list1b, "GE", all_vars, s_lab=s_str)  ## change
+#res = compare(paper_list1b_DM, "DM", all_vars, s_lab=s_str)  ## change
+res = compare(paper_list2, "ME", all_vars, s_lab=s_str)  ## change
+#res = compare(KEGG_list1ac_ME, "ME", all_vars, s_lab=s_str)  ## change
+#res = compare(KEGG_list1bd_DM, "DM", all_vars, s_lab=s_str)  ## change
+#res = compare(KEGG_list1bd_GE, "GE", all_vars, s_lab=s_str)  ## change
+
+for row in range(4):
+    print row
+    for item in res[1][row]: print item
+
+
+## ___significance:___
+ref_list = paper_list1a  ## change
+dim = len(ref_list)
+nrep = 1000
+lengths = [len(ref_list[i]) for i in range(dim)]
+values_1 = []
+values_2 = []
+for i in range(nrep):
+    var_list = [0]*lengths[0] + [1]*lengths[1] + [2]*lengths[2] + [3]*lengths[3]  ## change
+    sets = [[] for d in range(dim)]
+    for v in var_list:
+        sets[random.randint(dim)].append(v)
+    values_1.append(print_impt(sets, dim))
+    values_2.append(print_prt(sets, dim))
+print round(mean(values_1), 3), round(std(values_1), 3)
+print round(mean(values_2), 3), round(std(values_2), 3)
+
+
+## ___markers:___
+def var_signals(var_list_one, d_type, data_list, r=4, s_lab="2", norm_t="mean"):
+    d_idx = ["DM", "GE", "ME"].index(d_type)
+    code_mat = var_group_table(var_list_one, d_type, data_list)
+    
+    res = load("iNMFresS%s_D%drep200c1.npy" % (s_lab, r))
+    K = len(res[1])
+    Hs = [res[1][k] for k in range(K)]
+    if norm_t == "mean": HsN = [(Hs[k].T/mean(Hs[k], 1)).T for k in range(K)]
+    if norm_t == "median": HsN = [(Hs[k].T/median(Hs[k], 1)).T for k in range(K)]
+    
+    code_mat = var_group_table(var_list_one, d_type, data_list)
+    v_idx = code_mat[0][2]
+    if type(v_idx) != int: return [nan]*r
+    vec = HsN[d_idx][:, v_idx]
+    for row in range(len(vec)): print round(vec[row], 1)
+    return [vec[row] for row in range(len(vec))]
+
+KEGG_list_PiC = [  ## pathways in cancer (SA/EA/PL/BD)
+    ['SLC2A1', 'FIGF', 'TGFA', 'PDGFB', 'TGFB1', 'PTGS2', 'NOS2A', 'MMP1',
+        'IL8'],
+    ["BCL2", "KLK3", 'CASP3', 'BIRC5', 'BIRC8', 'TRAF1', 'FRAP1', 'CASP9',
+        "BCL2L1", 'FOXO1', 'TP53', 'STK4', 'MAPK8'],
+    ['CCNA1', 'CCND1', "MYC", 'PPARD', 'CDK4', 'CDKN1A', 'CDKN1B', "BCL2L1",
+        "BCL2", "KLK3", 'BMP2', 'GLI1', 'WNT16', 'HHIP', 'PTCH1'],
+    ['CSF3R', 'CSF1R', 'E2F1', 'IL6', "MYC"]
+    ]
+## http://www.biocarta.com/pathfiles/h_atrbrcaPathway.asp
+## DNA damage, block cell cycle progression, induce DNA repair, checkpoint control
+BioCarta_BRCA = [['BRCA1', 'BRCA2', 'RAD51', 'FANCD2', 'ATM', 'ATR', 'ATRIP',
+    'CHEK1', 'CHEK2', 'TP53', 'FANCA', 'FANCC', 'FANCE', 'FANCF', 'FANCG',
+    'NBN', 'RAD50', 'MRE11A', 'HUS1', 'RAD1', 'RAD9A', 'RAD17']]
+## http://www.biocarta.com/pathfiles/h_ptenPathway.asp
+## phosphorylation to cell survival, inhibition of cell migration and spreading
+BioCarta_PTEN = [['PTEN', 'PIK3CA', 'AKT1', 'PDK1', 'PDK2', 'ILK', 'PTK2',
+    'BCAR1', 'ITGB1', 'SHC1', 'SOS1', 'GRB2', 'MAPK3', 'MAPK1', 'FOXO3',
+    'FASLG', 'CDKN1B']]
+## http://www.biocarta.com/pathfiles/h_p27Pathway.asp
+## inhibits checkpoint, modulates cell survival/proliferation/apoptosis
+BioCarta_p27 = [['CDKN1B', 'CDK2', 'CCNE1', 'UBE2M', 'NEDD8', 'CUL1', 'RBX1',
+    'SKP2', 'SKP1A', 'CKS1B', 'RB1', 'E2F1', 'TFDP1']]
+
+## http://www.biocarta.com/pathfiles/h_cdc42racPathway.asp
+## 
+BioCarta_PI3Ksub = [['PDGFRA', 'PIK3R1', 'RAC1', 'CDC42', 'PAK1', 'WASL',
+    'RHOA', 'ARPC1A']]
+## http://www.biocarta.com/pathfiles/h_tsp1Pathway.asp
+## 
+BioCarta_TSP1 = [['THBS1', 'CD36', 'FYN', 'CASP3', 'MAPK14', 'JUN', 'FOS']]
+
+## 4 BioCarta pathways
+## http://www.biocarta.com/pathfiles/h_atrbrcaPathway.asp
+## http://www.biocarta.com/pathfiles/h_rbPathway.asp
+## http://www.biocarta.com/pathfiles/h_ptenPathway.asp
+## http://www.biocarta.com/pathfiles/h_p27Pathway.asp
+BioCarta_4P = [[
+    'HUS1', 'RAD1', 'RAD9', 'RAD17', 'ATM', 'ATR', 'ATRIP', 'CHEK1', 'CHEK2',#
+    'TP53', 'BRCA1', 'BRCA2', 'RAD51', 'FANCD2', 'FANCE', 'FANCA', 'FANCC',
+    'FANCF', 'FANCG', 'NBN', 'RAD50', 'MRE11A',
+    'CDC2', 'CDC25C', 'YWHAG', 'CDK2', 'RB1', 'CDK4', 'MYT1', 'WEE1',#
+    'PIK3RA', 'PIK3CA', 'PTEN', 'PDPK1', 'PDK2', 'ILK', 'PTK2', 'BCAR1',#
+    'ITGB1', 'SHC1', 'SOS1', 'GRB2', 'MAPK3', 'MAPK1', 'AKT1', 'FOXO3',
+    'FASLG', 'CDKN1B', 'CCNE1', 'E2F1', 'TFDP1'#
+    ]]
+BioCarta_4P2 = [["RAD9", "HUS1", "RAD1", "RAD17", "RAD50", "MRE11A", "NBN",
+    "ATM", "ATR", "CHEK1", "CHEK2", "CDC25A", "CDC25B", "CDC25C", "TP53",
+    "CDKN1A", "CDK2", "CDC45L", "WEE1", "CDC2", "PIK3CA", "PTEN", "AKT1",
+    "AKT2", "TSC1", "TSC2", "RHEB", "BAD", "GSK3A", "GSK3B", "MDM2", "FOXO3",
+    "CDKN1B", "FASLG", "RB1", "CDK4", "CDK6", "CCNB1", "CCNB2", "CCND1",
+    "CCND2", "CCND3", "CCNA1", "CCNA2", "CCNE1", "CCNE2", "E2F1", "E2F2",
+    "E2F3", "BRCA1", "BRCA2", "RAD51", "C11orf30", "PTK2", "BCAR1", "SHC1",
+    "MAPK3", "MAPK1", "ILK", "ITGB1", "PDK2", "PDPK1"]]
+set_d_type = 'GE'
+
+#var_signals([['HMGA2']], set_d_type, all_vars)
+
+
+output = []
+for row in BioCarta_4P2:  ## repeat
+    for label in row:
+        print label
+        print ''
+        output_row = var_signals([[label]], set_d_type, all_vars, norm_t="mean")
+        output.append(output_row)
+        print ''
+
+print array(output)
+
+savetxt("test", array(output).T)
+
+for item in BioCarta_4P2[0]: print item
+
