@@ -5,10 +5,10 @@ iNMF base: main functions for jNMF, iNMF, tuning selection, data generation, eva
 
 iNMF analysis (TCGA): code for TCGA analysis
 
-#Data:
+# Data
 DM/GE/ME_vars: (.npy) variables
 
-flt_dataset_DM/GE/ME: (text file) post-processed data sets (a/b: separated WRT observations)
+flt_dataset_DM/GE/ME: (text file) post-processed data sets (a/b/c: separated WRT observations)
 
 flt_DM/GE/ME_vars: (.npy) post-processed (filtered) variables
 
