@@ -66,7 +66,7 @@ def jNMF_run(Xs, D, Sp=0, nrep=200, steps=100):
         if obj_vals[-1] == min(obj_vals):
             W_f = W
             Hs_f = Hs
-    print "done"
+    #print "done"
     return [W_f, Hs_f, obj_vals, n_iter]
 
 def iNMF_run(Xs, D, L, Sp=0, nrep=200, steps=100):
@@ -114,7 +114,7 @@ def iNMF_run(Xs, D, L, Sp=0, nrep=200, steps=100):
             W_f = W
             Hs_f = Hs
             Vs_f = Vs
-    print "done"
+    #print "done"
     return [W_f, Hs_f, Vs_f, obj_vals, n_iter]
 
 def iNMF_tuning_select(Xs_, D, mod_dim=0, c=2, L_range =
@@ -132,7 +132,7 @@ def iNMF_tuning_select(Xs_, D, mod_dim=0, c=2, L_range =
         res1[1].append(res[1][0])
         norms += linalg.norm(Xs_[k] - res[0].dot(res[1][0]))
     thres = baseline + c*(baseline - norms)
-    print "threshold: " + str(thres), str([baseline, norms])
+    #print "threshold: " + str(thres), str([baseline, norms])
     OVs = []
     res_list = []
     for L in L_range:
