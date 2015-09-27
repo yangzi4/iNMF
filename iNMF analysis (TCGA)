@@ -161,7 +161,7 @@ plt.hist(datasets[2].flatten(), bins=20)
 
 def transform_DM(data):
     "Transforms DM data (divide)."
-    x = data/nanstd(data)#sqrt(sum(data**2))
+    x = data/sqrt(sum(data**2))#nanstd(data)
     return x
 
 def transform_GE(data):
@@ -170,14 +170,14 @@ def transform_GE(data):
     x += 4
     x = amax((x, random.uniform(0, 1e-3, shape(x))), 0)
     x = amin((x, 8 - random.uniform(0, 1e-3, shape(x))), 0)
-    return x#/sqrt(sum(x**2))
+    return x/sqrt(sum(x**2))
 
 def transform_ME(data):
     "Transforms ME data (log2, shift, truncate, divide)."
     x = log2(data) - 2
     x = amax((x, random.uniform(0, 1e-3, shape(x))), 0)
     x = amin((x, 4 - random.uniform(0, 1e-3, shape(x))), 0)
-    x = x/nanstd(x)#sqrt(sum(x**2))
+    x = x/sqrt(sum(x**2))#nanstd(x)
     return x
 
 tsf_datasets = [transform_DM(datasets[0]), transform_GE(datasets[1]),
