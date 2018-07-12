@@ -209,6 +209,7 @@ os.chdir(analysis_path)
 ## ___run___:
 os.chdir(analysis_path)
 datasets = [load("flt_dataset_DM.npy"), load("flt_dataset_GE.npy"), load("flt_dataset_ME.npy")]
+## datasets = [loadtxt("flt_dataset_DM"), loadtxt("flt_dataset_GE"), loadtxt("flt_dataset_ME")]
 
 L_sel2 = iNMF_tuning_select(datasets, 2)
 L_sel4 = iNMF_tuning_select(datasets, 4)
